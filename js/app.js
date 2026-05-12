@@ -882,21 +882,27 @@ function handleSampleChange() {
   renderDataPage();
 }
 
+// Store raw file text so separator changes re-parse without re-uploading
+let _rawFileText = null;
+
 function handleFileUpload(evt) {
   const file = evt.target.files[0];
   if (!file) return;
   document.getElementById('upload-filename').textContent = file.name;
-  const sep = document.getElementById('csv-sep')?.value || ',';
   const reader = new FileReader();
-  reader.onload = e => {
-    try {
-      DataStore.loadFromCSV(e.target.result, sep);
-      renderDataPage();
-    } catch(err) {
-      alert('Could not parse file: ' + err.message);
-    }
-  };
+  reader.onload = e => { _rawFileText = e.target.result; reparseUpload(); };
   reader.readAsText(file);
+}
+
+function reparseUpload() {
+  if (!_rawFileText) return;
+  const sep = document.getElementById('csv-sep')?.value || ',';
+  try {
+    DataStore.loadFromCSV(_rawFileText, sep);
+    renderDataPage();
+  } catch(err) {
+    alert('Could not parse file: ' + err.message);
+  }
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────
