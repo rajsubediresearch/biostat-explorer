@@ -182,6 +182,10 @@ function runAnalysis() {
 
   const resultEl = document.getElementById('analysis-result');
   resultEl.innerHTML = `<div style="padding:2rem;text-align:center"><span class="spinner"></span> Computing…</div>`;
+  // Clear all output divs on every new run
+  document.getElementById('analysis-diag').innerHTML = '';
+  document.getElementById('analysis-forest').innerHTML = '';
+  document.getElementById('analysis-plot-wrap').innerHTML = '';
 
   setTimeout(() => {
     try {
