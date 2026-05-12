@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BioStat Explorer</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.27.1/plotly.min.js"></script>
+</head>
+<body>
+
+<!-- ── Top Nav ──────────────────────────────────────────────────────────── -->
+<nav class="topnav">
+  <span class="brand">BioStat<span> Explorer</span></span>
+  <div class="nav-links">
+    <a data-tab="home">🏠 Home</a>
+    <a data-tab="data">📂 Data</a>
+    <a data-tab="analysis">📊 Analysis</a>
+    <a data-tab="plots">📈 Plots</a>
+  </div>
+  <a href="https://rajsubediresearch.com" target="_blank" class="nav-right">
+    Raj Subedi · GSU Epidemiology
+  </a>
+</nav>
+
+<!-- ── Page Wrap ────────────────────────────────────────────────────────── -->
+<div class="page-wrap">
+
+  <!-- ===== HOME ========================================================= -->
+  <div id="page-home" class="page" style="padding:1.5rem 2rem;max-width:900px;margin:0 auto;width:100%">
+    <div class="hero">
+      <h1>BioStat Explorer</h1>
+      <p>An interactive, browser-based biostatistics toolkit for education and research.
+         All computation runs locally in your browser — no server, no uploads, instant results.</p>
+    </div>
+    <div class="feature-grid">
+      <div class="feature-card" data-tab="data">
+        <div class="icon">📂</div>
+        <h3>Data</h3>
+        <p>Load built-in epidemiology or clinical trial datasets, or upload your own CSV / Excel file.</p>
+      </div>
+      <div class="feature-card" data-tab="analysis">
+        <div class="icon">📊</div>
+        <h3>Analysis</h3>
+        <p>Descriptive statistics, linear & logistic regression, t-test, and one-way ANOVA with Tukey post-hoc.</p>
+      </div>
+      <div class="feature-card" data-tab="plots">
+        <div class="icon">📈</div>
+        <h3>Plots</h3>
+        <p>Interactive histograms, density curves, boxplots, scatter plots, and bar charts with hover tooltips.</p>
+      </div>
+      <div class="feature-card" data-tab="analysis">
+        <div class="icon">🔬</div>
+        <h3>Diagnostics</h3>
+        <p>Full regression diagnostics: residual plots, Q-Q, Cook's D, Hosmer-Lemeshow, and calibration plots.</p>
+      </div>
+      <div class="feature-card" data-tab="analysis">
+        <div class="icon">🌲</div>
+        <h3>Forest Plots</h3>
+        <p>Coefficient and odds ratio forest plots with 95% CI and significance coloring.</p>
+      </div>
+      <div class="feature-card" data-tab="analysis">
+        <div class="icon">📝</div>
+        <h3>Interpretation</h3>
+        <p>Auto-generated plain-language result interpretation for every analysis.</p>
+      </div>
+    </div>
+    <div class="card" style="margin-top:1rem">
+      <div class="card-header">📦 Built-in Sample Datasets</div>
+      <div class="card-body">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
+          <div>
+            <div class="fw-600 mb-1">Epidemiology Dataset <span class="tag">n = 300</span></div>
+            <div class="text-muted small">Age, sex, BMI, smoking, vaccination status, SBP, disease outcome, severity, transport mode. Suitable for logistic, linear, ordinal, ANOVA.</div>
+          </div>
+          <div>
+            <div class="fw-600 mb-1">Clinical Trial Dataset <span class="tag">n = 250</span></div>
+            <div class="text-muted small">Treatment arm, age, weight, cholesterol, BP change, recovery status, outcome category. Suitable for t-test, ANOVA, logistic regression.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="alert alert-warning" style="margin-top:1rem;font-size:0.83rem">
+      ⚠️ <strong>Statistical associations only.</strong> All results are for educational purposes.
+      Causal interpretation requires careful consideration of study design, confounding, and biological plausibility.
+    </div>
+  </div>
+
+  <!-- ===== DATA ========================================================= -->
+  <div id="page-data" class="page" style="display:none;width:100%">
+    <div class="page-wrap" style="padding-top:0">
+      <!-- sidebar -->
+      <div class="sidebar">
+        <div class="sb-section">
+          <div class="sb-title">Data Source</div>
+          <div class="radio-group">
+            <label><input type="radio" name="data-src" value="sample" checked onchange="handleDataSourceChange()"> Use sample dataset</label>
+            <label><input type="radio" name="data-src" value="upload" onchange="handleDataSourceChange()"> Upload my own</label>
+          </div>
+        </div>
+        <div id="sample-select-wrap">
+          <label>Choose dataset</label>
+          <div class="select-wrap">
+            <select id="sample-select" onchange="handleSampleChange()">
+              <option>Epidemiology Dataset (n=300)</option>
+              <option>Clinical Trial Dataset (n=250)</option>
+            </select>
+          </div>
+        </div>
+        <div id="upload-wrap" class="hidden">
+          <label>Upload CSV or TXT</label>
+          <div class="upload-zone" onclick="document.getElementById('file-input').click()">
+            <input type="file" id="file-input" accept=".csv,.txt" onchange="handleFileUpload(event)">
+            📁 Click to browse
+            <div id="upload-filename" class="small mt-1 text-muted"></div>
+          </div>
+          <label>Separator</label>
+          <div class="select-wrap">
+            <select id="csv-sep">
+              <option value=",">, (comma)</option>
+              <option value="&#9;">⇥ (tab)</option>
+              <option value=";">; (semicolon)</option>
+            </select>
+          </div>
+        </div>
+        <hr>
+        <div id="data-info" style="font-size:0.82rem;line-height:1.8"></div>
+      </div>
+      <!-- main -->
+      <div class="main-content">
+        <div class="card">
+          <div class="card-header">📋 Data Preview</div>
+          <div id="data-table-wrap" class="card-body" style="padding:0"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== ANALYSIS ===================================================== -->
+  <div id="page-analysis" class="page" style="display:none;width:100%">
+    <div class="page-wrap" style="padding-top:0">
+      <!-- sidebar -->
+      <div class="sidebar" id="analysis-sidebar"></div>
+      <!-- main -->
+      <div class="main-content">
+        <div id="analysis-result">
+          <div class="alert alert-info">
+            Select a statistical method and variables in the sidebar, then click <strong>▶ Run Analysis</strong>.
+          </div>
+        </div>
+        <div id="analysis-diag"></div>
+        <div id="analysis-forest"></div>
+        <div id="analysis-plot-wrap"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== PLOTS ======================================================== -->
+  <div id="page-plots" class="page" style="display:none;width:100%">
+    <div class="page-wrap" style="padding-top:0">
+      <!-- sidebar -->
+      <div class="sidebar" id="plot-sidebar"></div>
+      <!-- main -->
+      <div class="main-content">
+        <div class="card">
+          <div class="card-header">📊 Visualization</div>
+          <div class="card-body">
+            <div id="explore-plot" style="min-height:420px"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /page-wrap -->
+
+<!-- ── Scripts ─────────────────────────────────────────────────────────── -->
+<script src="js/stats.js"></script>
+<script src="js/data.js"></script>
+<script src="js/plots.js"></script>
+<script src="js/app.js"></script>
+
+</body>
+</html>
