@@ -334,12 +334,13 @@ function tukeyPVal(q, k, df) {
 }
 
 // ── Descriptive Statistics ───────────────────────────────────────────────
-function descStats(df, cols) {
+function descStats(df, cols, forceCat=[]) {
   const numeric = [], categorical = [];
   for (const col of cols) {
     const vals = df.map(r=>r[col]).filter(v=>v!=null&&v!=='');
     const nums = vals.map(Number).filter(v=>!isNaN(v));
-    if (nums.length > vals.length*0.6 && nums.length > 0) {
+    const forceAsCat = forceCat.includes(col);
+    if (!forceAsCat && nums.length > vals.length*0.6 && nums.length > 0) {
       // numeric
       numeric.push({
         variable: col, n: nums.length,

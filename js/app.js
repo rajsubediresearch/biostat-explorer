@@ -115,6 +115,18 @@ function onModelTypeChange() {
         <label>Select variables (or leave blank for all)</label>
         <select id="desc-vars" multiple style="height:90px">${selOpts(allCols)}</select>
         <div class="text-muted small mt-1">Ctrl/Cmd+click to select multiple</div>
+      </div>
+      <div class="sb-section">
+        <div class="sb-title">Force as Categorical</div>
+        <div class="text-muted small mb-1">Override auto-detection — e.g. binary 0/1 variables you want frequency counts for instead of mean/SD.</div>
+        <div id="force-cat-checkboxes" style="max-height:130px;overflow-y:auto;display:flex;flex-direction:column;gap:4px;margin-top:4px">
+          ${allCols.map(c=>`
+            <label style="display:flex;align-items:center;gap:6px;font-size:0.81rem;font-weight:400;cursor:pointer">
+              <input type="checkbox" class="force-cat-cb" value="${c}" style="width:auto;accent-color:var(--blue)">
+              ${c}
+              ${isNumericCol(c) ? '<span style="font-size:0.7rem;color:var(--text-muted)">(numeric)</span>' : ''}
+            </label>`).join('')}
+        </div>
       </div>`;
   } else if (mt === 'lm_simple') {
     html = `
@@ -208,7 +220,9 @@ function renderDescriptive(df) {
   const selEl = document.getElementById('desc-vars');
   const selected = selEl ? [...selEl.selectedOptions].map(o=>o.value) : [];
   const cols = selected.length > 0 ? selected : DataStore.cols();
-  const res  = descStats(df, cols);
+  // Collect user-forced categorical overrides
+  const forceCat = [...document.querySelectorAll('.force-cat-cb:checked')].map(cb=>cb.value);
+  const res  = descStats(df, cols, forceCat);
 
   let html = '';
   if (res.numeric.length > 0) {
