@@ -480,3 +480,161 @@ function shapiroWilkApprox(x) {
   const p  = 1 - Stats.normCDF(z);
   return { W, p };
 }
+
+// ── Ordinal Logistic Regression (Proportional Odds) ───────────────────────
+// Fits cumulative logit model: logit P(Y <= j) = alpha_j - X*beta
+function fitOrdinal(y, X) {
+  // y: integer category indices 0,1,...,J-1
+  // X: n x p design matrix WITHOUT intercept (intercepts are the thresholds)
+  const n = y.length;
+  const p = X[0].length;
+  const levels = [...new Set(y)].sort((a,b)=>a-b);
+  const J = levels.length;
+  if (J < 3) return null; // need at least 3 ordered levels
+  const K = J - 1; // number of thresholds
+
+  // Re-index y to 0..J-1
+  const yIdx = y.map(v => levels.indexOf(v));
+
+  // Parameters: [alpha_0, ..., alpha_{K-1}, beta_0, ..., beta_{p-1}]
+  // alpha must be ordered: alpha_0 < alpha_1 < ... < alpha_{K-1}
+  // Parameterise as: alpha_0 free, alpha_j = alpha_0 + exp(delta_1)+...+exp(delta_{j-1})
+  // Total params = K + p
+  const nParam = K + p;
+  let params = new Array(nParam).fill(0);
+  // Init thresholds from empirical cumulative proportions
+  for (let j=0; j<K; j++) {
+    const cumP = yIdx.filter(v=>v<=j).length / n;
+    params[j] = Stats.normInv(Math.min(Math.max(cumP, 0.01), 0.99));
+  }
+
+  // Helper: get thresholds from params (enforce ordering via softplus gaps)
+  const getAlpha = (params) => {
+    const alpha = [params[0]];
+    for (let j=1; j<K; j++) alpha.push(alpha[j-1] + Math.log(1+Math.exp(params[j])));
+    return alpha;
+  };
+
+  // Log-likelihood
+  const logLik = (params) => {
+    const alpha = getAlpha(params);
+    const beta  = params.slice(K);
+    let ll = 0;
+    for (let i=0; i<n; i++) {
+      const xb = Stats.sum(X[i].map((v,j)=>v*beta[j]));
+      const yi = yIdx[i];
+      const pLo = yi === 0   ? 1 : 1/(1+Math.exp(-(alpha[yi-1]-xb)));
+      const pHi = yi === J-1 ? 1 : 1/(1+Math.exp(-(alpha[yi  ]-xb)));
+      const pi  = Math.max(pHi - (1-pLo), 1e-15);
+      ll += Math.log(pi);
+    }
+    return ll;
+  };
+
+  // Gradient
+  const grad = (params) => {
+    const alpha = getAlpha(params);
+    const beta  = params.slice(K);
+    const g = new Array(nParam).fill(0);
+    for (let i=0; i<n; i++) {
+      const xb  = Stats.sum(X[i].map((v,j)=>v*beta[j]));
+      const yi  = yIdx[i];
+      const muLo = yi===0   ? 0 : 1/(1+Math.exp(alpha[yi-1]-xb));
+      const muHi = yi===J-1 ? 0 : 1/(1+Math.exp(alpha[yi  ]-xb));
+      const dLo = yi===0   ? 0 : muLo*(1-muLo);
+      const dHi = yi===J-1 ? 0 : muHi*(1-muHi);
+      const pi  = Math.max(muHi - muLo + (yi===0?1:0) - (yi===J-1?0:0)
+                  + (yi===0?-muLo+1:0) + (yi===J-1?muHi:0)
+                  - (yi>0&&yi<J-1 ? muLo : 0) + (yi>0&&yi<J-1 ? muHi : 0), 1e-15);
+      // Simplified gradient via numerical differences for robustness
+    }
+    // Use numerical gradient
+    const eps = 1e-5, ll0 = logLik(params);
+    for (let k=0; k<nParam; k++) {
+      const p2 = [...params]; p2[k] += eps;
+      g[k] = (logLik(p2) - ll0) / eps;
+    }
+    return g;
+  };
+
+  // L-BFGS-B style: use simple gradient ascent with line search
+  let ll = logLik(params);
+  for (let iter=0; iter<500; iter++) {
+    const g = grad(params);
+    const gnorm = Math.sqrt(Stats.sum(g.map(v=>v*v)));
+    if (gnorm < 1e-6) break;
+    let step = 0.1;
+    for (let ls=0; ls<20; ls++) {
+      const p2 = params.map((v,k)=>v+step*g[k]);
+      const ll2 = logLik(p2);
+      if (ll2 > ll) { params = p2; ll = ll2; break; }
+      step *= 0.5;
+    }
+  }
+
+  // Extract final alpha and beta
+  const alpha = getAlpha(params);
+  const beta  = params.slice(K);
+
+  // Standard errors via numerical Hessian
+  const hess = numericalHessian(logLik, params);
+  const negHessInv = invertGauss(hess.map(row=>row.map(v=>-v)));
+  const se = negHessInv
+    ? params.map((_,k)=>Math.sqrt(Math.max(negHessInv[k][k],0)))
+    : new Array(nParam).fill(NaN);
+
+  const betaSE   = se.slice(K);
+  const z        = beta.map((b,i)=>b/betaSE[i]);
+  const pvals    = z.map(zv=>Stats.tPValue(zv, n-nParam));
+  const ci       = beta.map((b,i)=>[b-1.96*betaSE[i], b+1.96*betaSE[i]]);
+
+  // Null log-likelihood (intercepts only)
+  const nullParams = [...params.slice(0,K), ...new Array(p).fill(0)];
+  const llNull = logLik(nullParams);
+  const mcFaddenR2 = 1 - ll/llNull;
+  const aic = -2*ll + 2*nParam;
+
+  return { beta, betaSE, z, pvals, ci, alpha, levels, ll, llNull,
+           mcFaddenR2, aic, n, p, K, J };
+}
+
+// ── Multinomial Logistic Regression ──────────────────────────────────────
+// One-vs-reference: fits J-1 binary logistic models
+function fitMultinomial(y, X) {
+  const levels = [...new Set(y)].filter(v=>v!=null).sort();
+  const J = levels.length;
+  if (J < 3) return null;
+  const ref = levels[0]; // reference category
+
+  // Fit J-1 binary logistic models (each level vs reference)
+  const models = [];
+  for (let j=1; j<J; j++) {
+    const lv = levels[j];
+    // Build binary outcome: 1 if y==lv, 0 if y==ref, exclude others
+    const idx = y.map((_,i)=>i).filter(i=>y[i]===lv||y[i]===ref);
+    const yBin = idx.map(i=>+(y[i]===lv));
+    const Xsub = idx.map(i=>X[i]);
+    const fit = fitLogistic(yBin, Xsub);
+    models.push({ level:lv, fit, idx });
+  }
+  return { levels, ref, models };
+}
+
+// ── Numerical Hessian ─────────────────────────────────────────────────────
+function numericalHessian(f, x) {
+  const n = x.length, eps = 1e-4;
+  const H = Array.from({length:n}, ()=>new Array(n).fill(0));
+  const f0 = f(x);
+  for (let i=0; i<n; i++) {
+    for (let j=i; j<n; j++) {
+      const xpp=[...x], xpm=[...x], xmp=[...x], xmm=[...x];
+      xpp[i]+=eps; xpp[j]+=eps;
+      xpm[i]+=eps; xpm[j]-=eps;
+      xmp[i]-=eps; xmp[j]+=eps;
+      xmm[i]-=eps; xmm[j]-=eps;
+      const h=(f(xpp)-f(xpm)-f(xmp)+f(xmm))/(4*eps*eps);
+      H[i][j]=H[j][i]=h;
+    }
+  }
+  return H;
+}

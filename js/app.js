@@ -67,6 +67,8 @@ function renderAnalysisSidebar() {
             <option value="lm_multi">Multiple Linear Regression</option>
             <option value="logit_simple">Simple Logistic Regression</option>
             <option value="logit_multi">Multiple Logistic Regression</option>
+            <option value="ordinal">Ordinal Logistic Regression</option>
+            <option value="multinom">Multinomial Logistic Regression</option>
           </optgroup>
           <optgroup label="Group Comparison">
             <option value="ttest">Independent t-test</option>
@@ -140,6 +142,22 @@ function onModelTypeChange() {
       <label>Main Exposure</label>
       <div class="select-wrap"><select id="exposure">${selOpts(allCols)}</select></div>
       ${multiSel('covariates', allCols, 'Covariates (optional)')}`;
+  } else if (mt === 'ordinal') {
+    html = `
+      <label>Outcome (ordered categorical)</label>
+      <div class="select-wrap"><select id="outcome">${selOpts(catCols.length>0?catCols:allCols)}</select></div>
+      <label>Main Exposure</label>
+      <div class="select-wrap"><select id="exposure">${selOpts(allCols)}</select></div>
+      ${multiSel('covariates', allCols, 'Covariates (optional)')}
+      <div class="text-muted small mt-1">⚠️ Outcome levels will be sorted alphabetically — ensure ordering makes sense.</div>`;
+  } else if (mt === 'multinom') {
+    html = `
+      <label>Outcome (categorical, ≥3 levels)</label>
+      <div class="select-wrap"><select id="outcome">${selOpts(catCols.length>0?catCols:allCols)}</select></div>
+      <label>Main Exposure</label>
+      <div class="select-wrap"><select id="exposure">${selOpts(allCols)}</select></div>
+      ${multiSel('covariates', allCols, 'Covariates (optional)')}
+      <div class="text-muted small mt-1">Reference category = first level (alphabetical).</div>`;
   } else if (mt === 'ttest') {
     html = `
       <label>Continuous variable</label>
@@ -170,6 +188,8 @@ function runAnalysis() {
       if (mt === 'desc')        renderDescriptive(df);
       else if (mt.startsWith('lm_'))    renderLinear(df, mt);
       else if (mt.startsWith('logit_')) renderLogistic(df, mt);
+      else if (mt === 'ordinal')  renderOrdinal(df);
+      else if (mt === 'multinom') renderMultinom(df);
       else if (mt === 'ttest')  renderTTest(df);
       else if (mt === 'anova')  renderANOVA(df);
     } catch(e) {
@@ -430,6 +450,207 @@ function renderLogistic(df, mt) {
   setTimeout(() => PLT.forestPlot('forest-plot',
     fcRows.map(r=>r.term), fcRows.map(r=>r.or),
     fcRows.map(r=>r.ciLo), fcRows.map(r=>r.ciHi), fcRows.map(r=>r.p), 'Odds Ratio', true), 40);
+}
+
+// ── Ordinal Logistic Regression ───────────────────────────────────────────
+function renderOrdinal(df) {
+  const outCol = document.getElementById('outcome').value;
+  const expCol = document.getElementById('exposure').value;
+  const covSel = document.getElementById('covariates');
+  const covCols = covSel ? [...covSel.selectedOptions].map(o=>o.value) : [];
+  const predictors = [expCol, ...covCols];
+
+  const yRaw = df.map(r=>r[outCol]).filter(v=>v!=null&&v!=='');
+  const levels = [...new Set(yRaw)].sort();
+  if (levels.length < 3) {
+    document.getElementById('analysis-result').innerHTML =
+      '<div class="alert alert-danger">Ordinal regression requires an outcome with at least 3 ordered levels.</div>'; return;
+  }
+
+  const validRows = df.filter(r=>r[outCol]!=null&&r[outCol]!=='');
+  const y = validRows.map(r=>levels.indexOf(r[outCol]));
+  const { X, names } = buildDesignMatrix(validRows, predictors);
+  // Remove intercept column for ordinal (thresholds serve as intercepts)
+  const Xno = X.map(row=>row.slice(1));
+  const namesNo = names.slice(1);
+
+  const fit = fitOrdinal(y, Xno);
+  if (!fit) {
+    document.getElementById('analysis-result').innerHTML =
+      '<div class="alert alert-danger">Ordinal model failed. Check variable selection and ensure outcome has ≥3 levels.</div>'; return;
+  }
+
+  const OR = fit.beta.map(b=>Math.exp(b));
+  const ciOR = fit.ci.map(ci=>[Math.exp(ci[0]),Math.exp(ci[1])]);
+  const coefRows = namesNo.map((nm,i)=>({
+    term:nm, beta:fit.beta[i], se:fit.betaSE[i], z:fit.z[i],
+    p:fit.pvals[i], or:OR[i], ciLo:ciOR[i][0], ciHi:ciOR[i][1]
+  }));
+
+  document.getElementById('analysis-result').innerHTML = `
+    <div class="alert alert-info mb-2">
+      <strong>Model fit:</strong>
+      AIC = ${fit.aic.toFixed(2)} &nbsp;|&nbsp;
+      McFadden R² = ${fit.mcFaddenR2.toFixed(4)} &nbsp;|&nbsp;
+      Outcome levels (ordered): <strong>${levels.join(' < ')}</strong> &nbsp;|&nbsp;
+      Reference (lowest): <strong>${levels[0]}</strong>
+    </div>
+    <div class="card mb-2">
+      <div class="card-header">📋 Thresholds (Intercepts)</div>
+      <div class="card-body" style="padding:0">
+        <div class="tbl-wrap">
+          <table><thead><tr><th>Threshold</th><th>α</th><th>Interpretation</th></tr></thead>
+          <tbody>
+            ${fit.alpha.map((a,j)=>`<tr>
+              <td class="fw-600">${levels[j]} | ${levels[j+1]}</td>
+              <td class="mono">${a.toFixed(4)}</td>
+              <td class="text-muted small">logit P(Y ≤ ${levels[j]})</td>
+            </tr>`).join('')}
+          </tbody></table>
+        </div>
+      </div>
+    </div>
+    <div class="card mb-2">
+      <div class="card-header">📋 Coefficient Table (Proportional Odds)</div>
+      <div class="card-body" style="padding:0">
+        <div class="tbl-wrap">
+          <table><thead><tr>
+            <th>Term</th><th>β</th><th>OR</th><th>CI Low</th><th>CI High</th>
+            <th>SE</th><th>z</th><th>p-value</th>
+          </tr></thead><tbody>
+            ${coefRows.map(r=>`<tr>
+              <td class="fw-600">${r.term}</td>
+              <td class="mono">${r.beta.toFixed(4)}</td>
+              <td class="mono fw-600">${r.or.toFixed(4)}</td>
+              <td class="mono">${r.ciLo.toFixed(4)}</td>
+              <td class="mono">${r.ciHi.toFixed(4)}</td>
+              <td class="mono">${r.se.toFixed(4)}</td>
+              <td class="mono">${r.z.toFixed(4)}</td>
+              <td class="mono ${r.p<0.05?'sig-yes':'sig-no'}">${Stats.fmtP(r.p)}</td>
+            </tr>`).join('')}
+          </tbody></table>
+        </div>
+      </div>
+    </div>
+    ${interpOrdinal(expCol, outCol, covCols, coefRows.find(r=>r.term.startsWith(expCol)||r.term===expCol))}
+    <div class="alert alert-warning small">
+      ⚠️ The proportional odds assumption is that the OR is constant across all thresholds. Verify this assumption for your data.
+    </div>`;
+
+  document.getElementById('analysis-diag').innerHTML = '';
+  const fcRows = coefRows;
+  document.getElementById('analysis-forest').innerHTML = `
+    <div class="card">
+      <div class="card-header">🌲 Odds Ratio Forest Plot (Proportional Odds)</div>
+      <div class="card-body"><div id="forest-plot" style="height:${Math.max(200,fcRows.length*36+80)}px"></div></div>
+    </div>`;
+  setTimeout(() => PLT.forestPlot('forest-plot',
+    fcRows.map(r=>r.term), fcRows.map(r=>r.or),
+    fcRows.map(r=>r.ciLo), fcRows.map(r=>r.ciHi),
+    fcRows.map(r=>r.p), 'Odds Ratio (proportional odds)', true), 40);
+}
+
+// ── Multinomial Logistic Regression ──────────────────────────────────────
+function renderMultinom(df) {
+  const outCol = document.getElementById('outcome').value;
+  const expCol = document.getElementById('exposure').value;
+  const covSel = document.getElementById('covariates');
+  const covCols = covSel ? [...covSel.selectedOptions].map(o=>o.value) : [];
+  const predictors = [expCol, ...covCols];
+
+  const yRaw = df.map(r=>r[outCol]);
+  const levels = [...new Set(yRaw.filter(v=>v!=null&&v!==''))].sort();
+  if (levels.length < 3) {
+    document.getElementById('analysis-result').innerHTML =
+      '<div class="alert alert-danger">Multinomial regression requires an outcome with at least 3 levels.</div>'; return;
+  }
+
+  const validRows = df.filter(r=>r[outCol]!=null&&r[outCol]!=='');
+  const y = validRows.map(r=>r[outCol]);
+  const { X, names } = buildDesignMatrix(validRows, predictors);
+
+  const fit = fitMultinomial(y, X);
+  if (!fit) {
+    document.getElementById('analysis-result').innerHTML =
+      '<div class="alert alert-danger">Multinomial model failed. Check variable selection.</div>'; return;
+  }
+
+  let tableHTML = '';
+  let forestNames=[], forestOR=[], forestCILo=[], forestCIHi=[], forestP=[];
+
+  for (const m of fit.models) {
+    if (!m.fit) continue;
+    const OR  = m.fit.beta.map(b=>Math.exp(b));
+    const ciOR= m.fit.ci.map(ci=>[Math.exp(ci[0]),Math.exp(ci[1])]);
+    tableHTML += `
+      <div class="card mb-2">
+        <div class="card-header">📋 ${m.level} vs ${fit.ref} (reference)</div>
+        <div class="card-body" style="padding:0">
+          <div class="tbl-wrap">
+            <table><thead><tr>
+              <th>Term</th><th>β</th><th>OR</th><th>CI Low</th><th>CI High</th>
+              <th>SE</th><th>z</th><th>p-value</th>
+            </tr></thead><tbody>
+              ${names.map((nm,i)=>`<tr>
+                <td class="fw-600">${nm}</td>
+                <td class="mono">${m.fit.beta[i].toFixed(4)}</td>
+                <td class="mono fw-600">${OR[i].toFixed(4)}</td>
+                <td class="mono">${ciOR[i][0].toFixed(4)}</td>
+                <td class="mono">${ciOR[i][1].toFixed(4)}</td>
+                <td class="mono">${m.fit.se[i].toFixed(4)}</td>
+                <td class="mono">${m.fit.z[i].toFixed(4)}</td>
+                <td class="mono ${m.fit.pvals[i]<0.05?'sig-yes':'sig-no'}">${Stats.fmtP(m.fit.pvals[i])}</td>
+              </tr>`).join('')}
+            </tbody></table>
+          </div>
+        </div>
+      </div>`;
+    // Collect exposure row for forest plot
+    const expIdx = names.findIndex(nm=>nm.startsWith(expCol)||nm===expCol);
+    if (expIdx>=0) {
+      forestNames.push(`${m.level} vs ${fit.ref}: ${names[expIdx]}`);
+      forestOR.push(OR[expIdx]);
+      forestCILo.push(ciOR[expIdx][0]);
+      forestCIHi.push(ciOR[expIdx][1]);
+      forestP.push(m.fit.pvals[expIdx]);
+    }
+  }
+
+  document.getElementById('analysis-result').innerHTML = `
+    <div class="alert alert-info mb-2">
+      <strong>Multinomial Logistic Regression</strong> &nbsp;|&nbsp;
+      Outcome: <strong>${outCol}</strong> &nbsp;|&nbsp;
+      Reference level: <strong>${fit.ref}</strong> &nbsp;|&nbsp;
+      Levels: ${levels.join(', ')}
+    </div>
+    ${tableHTML}
+    <div class="alert alert-warning small">
+      ⚠️ Each comparison is a separate binary logistic model (level vs reference). Results report statistical associations only.
+    </div>`;
+
+  document.getElementById('analysis-diag').innerHTML = '';
+  if (forestNames.length > 0) {
+    document.getElementById('analysis-forest').innerHTML = `
+      <div class="card">
+        <div class="card-header">🌲 Exposure OR Forest Plot (each level vs reference)</div>
+        <div class="card-body"><div id="forest-plot" style="height:${Math.max(200,forestNames.length*36+80)}px"></div></div>
+      </div>`;
+    setTimeout(() => PLT.forestPlot('forest-plot',
+      forestNames, forestOR, forestCILo, forestCIHi, forestP,
+      'Odds Ratio', true), 40);
+  }
+}
+
+// ── Ordinal interpretation ────────────────────────────────────────────────
+function interpOrdinal(exp, out, covs, row) {
+  if (!row) return '';
+  const adj = covs.length>0 ? `, adjusting for ${covs.join(', ')}` : '';
+  const dir = row.or>=1 ? 'higher' : 'lower';
+  const sig = row.p<0.05;
+  const txt = sig
+    ? `<strong>${exp}</strong> is associated with <strong>${row.or.toFixed(3)} times ${dir} odds</strong> of being in a higher category of <strong>${out}</strong> (OR = ${row.or.toFixed(3)}, 95% CI: ${row.ciLo.toFixed(3)} to ${row.ciHi.toFixed(3)}, p ${Stats.fmtP(row.p)})${adj}.`
+    : `<strong>${exp}</strong> was <strong>not significantly associated</strong> with the ordered outcome <strong>${out}</strong> (OR = ${row.or.toFixed(3)}, 95% CI: ${row.ciLo.toFixed(3)} to ${row.ciHi.toFixed(3)}, p ${Stats.fmtP(row.p)})${adj}.`;
+  return `<div class="alert alert-success"><div class="fw-600 mb-1">📝 Interpretation</div>${txt}</div>`;
 }
 
 // ── t-test ────────────────────────────────────────────────────────────────
